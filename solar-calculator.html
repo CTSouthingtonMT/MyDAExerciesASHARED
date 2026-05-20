@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Solar PV Output Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f4f8;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #f7971e 0%, #ffd200 100%);
+      padding: 36px 20px;
+      text-align: center;
+    }
+    .header h1 { font-size: 2rem; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.2); }
+    .header p  { color: rgba(255,255,255,.88); margin-top: 8px; font-size: .95rem; }
+
+    /* ── Layout ── */
+    .container { max-width: 920px; margin: 0 auto; padding: 32px 20px; }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 28px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.07);
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #444;
+      margin-bottom: 22px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Form ── */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group.full { grid-column: 1 / -1; }
+
+    label { font-size: .82rem; font-weight: 600; color: #555; letter-spacing: .01em; }
+    .hint { font-size: .76rem; color: #999; }
+
+    input[type="text"],
+    input[type="number"] {
+      padding: 10px 14px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: .95rem;
+      transition: border-color .2s;
+      width: 100%;
+    }
+    input:focus { outline: none; border-color: #f7971e; }
+
+    .loc-row { display: flex; gap: 10px; }
+    .loc-row input { flex: 1; }
+
+    .btn {
+      padding: 10px 18px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: .88rem;
+      font-weight: 600;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .btn-secondary { background: #f0f0f0; color: #555; }
+    .btn-secondary:hover { background: #e2e2e2; }
+    .btn-primary {
+      background: linear-gradient(135deg, #f7971e, #ffd200);
+      color: #fff;
+      padding: 14px;
+      font-size: 1rem;
+      width: 100%;
+      margin-top: 6px;
+      box-shadow: 0 4px 14px rgba(247,151,30,.35);
+    }
+    .btn-primary:hover  { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(247,151,30,.45); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn:disabled { opacity: .6; cursor: not-allowed; transform: none !important; }
+
+    .coords-line { font-size: .78rem; color: #777; margin-top: 4px; min-height: 18px; }
+
+    /* PR badge */
+    .pr-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 700;
+      margin-left: 8px;
+    }
+    .pr-poor      { background: #ffebee; color: #c62828; }
+    .pr-average   { background: #fff3e0; color: #e65100; }
+    .pr-good      { background: #e8f5e9; color: #2e7d32; }
+    .pr-excellent { background: #e3f2fd; color: #1565c0; }
+
+    /* ── Error ── */
+    .error-box {
+      background: #ffebee;
+      color: #c62828;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-top: 14px;
+      font-size: .88rem;
+    }
+
+    /* ── Stat cards ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      border-radius: 14px;
+      padding: 22px 16px;
+      text-align: center;
+      color: #fff;
+    }
+    .stat-yellow { background: linear-gradient(135deg, #f7971e, #ffd200); }
+    .stat-green  { background: linear-gradient(135deg, #56ab2f, #a8e063); }
+    .stat-purple { background: linear-gradient(135deg, #667eea, #764ba2); }
+    .stat-value  { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+    .stat-label  { font-size: .78rem; opacity: .9; margin-top: 6px; }
+
+    /* ── Chart ── */
+    .chart-wrap { position: relative; height: 280px; }
+
+    /* ── Table ── */
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    thead th {
+      background: #f8f9fa;
+      padding: 11px 12px;
+      text-align: left;
+      font-weight: 600;
+      color: #555;
+      border-bottom: 2px solid #eee;
+    }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid #f2f2f2; }
+    tbody tr:hover td { background: #fafafa; }
+    .bar-wrap { width: 120px; }
+    .mini-bar {
+      height: 7px;
+      background: linear-gradient(90deg, #f7971e, #ffd200);
+      border-radius: 4px;
+    }
+
+    /* ── Note ── */
+    .note {
+      font-size: .78rem;
+      color: #888;
+      background: #fafafa;
+      border-left: 3px solid #f7971e;
+      padding: 10px 14px;
+      border-radius: 0 6px 6px 0;
+      margin-top: 16px;
+    }
+
+    .results-section { display: none; }
+
+    @media (max-width: 600px) {
+      .form-grid  { grid-template-columns: 1fr; }
+      .stats-grid { grid-template-columns: 1fr; }
+      .bar-wrap   { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>☀️ Solar PV Output Calculator</h1>
+  <p>Estimate monthly &amp; annual solar energy generation · Powered by PVGIS satellite data</p>
+</div>
+
+<div class="container">
+
+  <!-- ── Input card ── -->
+  <div class="card">
+    <div class="card-title">⚙️ System Configuration</div>
+
+    <div class="form-grid">
+
+      <!-- Location -->
+      <div class="form-group full">
+        <label>Location</label>
+        <div class="loc-row">
+          <input type="text" id="address"
+                 placeholder="e.g. Ho Chi Minh City, Vietnam"
+                 onkeydown="if(event.key==='Enter') geocode()" />
+          <button class="btn btn-secondary" id="btn-search" onclick="geocode()">Search</button>
+        </div>
+        <div class="coords-line" id="coords"></div>
+      </div>
+
+      <!-- Capacity -->
+      <div class="form-group">
+        <label>System Capacity (kWp)</label>
+        <input type="number" id="capacity" value="5" min="0.1" step="0.1" />
+        <span class="hint">Total rated output of all panels combined</span>
+      </div>
+
+      <!-- Tilt -->
+      <div class="form-group">
+        <label>Tilt Angle (°)</label>
+        <input type="number" id="tilt" value="15" min="0" max="90" step="1" />
+        <span class="hint">0° = flat/horizontal · 90° = vertical wall</span>
+      </div>
+
+      <!-- Azimuth -->
+      <div class="form-group">
+        <label>Azimuth (°)</label>
+        <input type="number" id="azimuth" value="180" min="0" max="360" step="5" />
+        <span class="hint">0°=North · 90°=East · 180°=South · 270°=West</span>
+      </div>
+
+      <!-- PR -->
+      <div class="form-group">
+        <label>
+          Performance Ratio (PR)
+          <span class="pr-badge pr-good" id="pr-badge">Good</span>
+        </label>
+        <input type="number" id="pr" value="0.80" min="0.50" max="0.95" step="0.01"
+               oninput="updatePRBadge()" />
+        <span class="hint">0.60–0.70 Poor · 0.70–0.80 Average · 0.80–0.85 Good · 0.85–0.95 Excellent</span>
+      </div>
+
+    </div><!-- /form-grid -->
+
+    <input type="hidden" id="lat" />
+    <input type="hidden" id="lon" />
+
+    <button class="btn btn-primary" id="btn-calc" onclick="calculate()">
+      Calculate Solar Output
+    </button>
+    <div id="error-area"></div>
+
+    <div class="note">
+      ℹ️ PVGIS automatically accounts for local irradiance and panel temperature using 10+ years of
+      satellite data. Your PR covers remaining losses: inverter efficiency, wiring, shading, soiling,
+      and mismatch.
+    </div>
+  </div><!-- /card -->
+
+  <!-- ── Results ── -->
+  <div class="results-section" id="results">
+
+    <div class="stats-grid">
+      <div class="stat-card stat-yellow">
+        <div class="stat-value" id="stat-annual">—</div>
+        <div class="stat-label">Annual Output (kWh/yr)</div>
+      </div>
+      <div class="stat-card stat-green">
+        <div class="stat-value" id="stat-yield">—</div>
+        <div class="stat-label">Specific Yield (kWh/kWp)</div>
+      </div>
+      <div class="stat-card stat-purple">
+        <div class="stat-value" id="stat-monthly">—</div>
+        <div class="stat-label">Avg Monthly (kWh)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📊 Monthly Production</div>
+      <div class="chart-wrap">
+        <canvas id="chart"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📅 Monthly Breakdown</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>Output (kWh)</th>
+            <th>Daily Avg (kWh/day)</th>
+            <th>Share of Year</th>
+            <th class="bar-wrap"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+  </div><!-- /results -->
+
+</div><!-- /container -->
+
+<script>
+  const MONTHS      = ['January','February','March','April','May','June',
+                       'July','August','September','October','November','December'];
+  const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const DAYS        = [31,28,31,30,31,30,31,31,30,31,30,31];
+
+  let chartInst = null;
+
+  /* ── PR badge ── */
+  function updatePRBadge() {
+    const pr    = parseFloat(document.getElementById('pr').value);
+    const badge = document.getElementById('pr-badge');
+    if      (pr < 0.70) { badge.textContent = 'Poor';      badge.className = 'pr-badge pr-poor'; }
+    else if (pr < 0.80) { badge.textContent = 'Average';   badge.className = 'pr-badge pr-average'; }
+    else if (pr < 0.85) { badge.textContent = 'Good';      badge.className = 'pr-badge pr-good'; }
+    else                { badge.textContent = 'Excellent';  badge.className = 'pr-badge pr-excellent'; }
+  }
+
+  /* ── Geocode ── */
+  async function geocode() {
+    const address = document.getElementById('address').value.trim();
+    if (!address) return;
+
+    const btn = document.getElementById('btn-search');
+    btn.textContent = '…';
+    btn.disabled = true;
+    clearError();
+
+    try {
+      const url  = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
+      const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+      const data = await resp.json();
+
+      if (!data.length) { showError('Location not found. Try a more specific address.'); return; }
+
+      const { lat, lon, display_name } = data[0];
+      document.getElementById('lat').value = lat;
+      document.getElementById('lon').value = lon;
+
+      const parts = display_name.split(',').slice(0, 3).join(',');
+      document.getElementById('coords').textContent =
+        `📌 ${parts}  ·  Lat ${parseFloat(lat).toFixed(4)}°, Lon ${parseFloat(lon).toFixed(4)}°`;
+    } catch {
+      showError('Geocoding failed. Check your internet connection.');
+    } finally {
+      btn.textContent = 'Search';
+      btn.disabled = false;
+    }
+  }
+
+  /* ── Calculate ── */
+  async function calculate() {
+    clearError();
+
+    const lat      = document.getElementById('lat').value;
+    const lon      = document.getElementById('lon').value;
+    const capacity = parseFloat(document.getElementById('capacity').value);
+    const tilt     = parseFloat(document.getElementById('tilt').value);
+    const azimuth  = parseFloat(document.getElementById('azimuth').value);
+    const pr       = parseFloat(document.getElementById('pr').value);
+
+    if (!lat || !lon)                            { showError('Search for your location first.'); return; }
+    if (!capacity || capacity <= 0)              { showError('Enter a valid system capacity (kWp).'); return; }
+    if (isNaN(tilt)    || tilt < 0 || tilt > 90) { showError('Tilt must be between 0° and 90°.'); return; }
+    if (isNaN(azimuth) || azimuth < 0 || azimuth > 360) { showError('Azimuth must be between 0° and 360°.'); return; }
+    if (isNaN(pr)      || pr < 0.5 || pr > 1)   { showError('Performance Ratio must be between 0.50 and 1.0.'); return; }
+
+    // PVGIS aspect: 0=South, -90=East, 90=West (opposite of compass azimuth convention)
+    const aspect = azimuth - 180;
+
+    const btn = document.getElementById('btn-calc');
+    btn.textContent = 'Fetching data…';
+    btn.disabled = true;
+
+    try {
+      // loss=0 so PVGIS returns temperature-corrected output with no additional losses.
+      // We apply PR ourselves for full transparency.
+      const api = `https://re.jrc.ec.europa.eu/api/v5_2/PVcalc`
+        + `?lat=${lat}&lon=${lon}`
+        + `&peakpower=${capacity}`
+        + `&loss=0`
+        + `&angle=${tilt}`
+        + `&aspect=${aspect}`
+        + `&outputformat=json`
+        + `&mountingplace=free`
+        + `&pvtechchoice=crystSi`;
+
+      const resp = await fetch(api);
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `HTTP ${resp.status}`);
+      }
+
+      const json    = await resp.json();
+      const monthly = json.outputs.monthly.fixed;
+
+      // Apply PR multiplier to PVGIS temperature-corrected monthly output
+      const kwhRaw = monthly.map(m => m['E_m']);
+      const kwh    = kwhRaw.map(v => v * pr);
+
+      renderResults(kwh, capacity);
+
+    } catch (e) {
+      showError(`PVGIS API error: ${e.message}`);
+    } finally {
+      btn.textContent = 'Calculate Solar Output';
+      btn.disabled = false;
+    }
+  }
+
+  /* ── Render ── */
+  function renderResults(kwh, capacity) {
+    const annual  = kwh.reduce((a, b) => a + b, 0);
+    const maxKwh  = Math.max(...kwh);
+    const totalStr = Math.round(annual).toLocaleString();
+
+    document.getElementById('stat-annual').textContent  = totalStr;
+    document.getElementById('stat-yield').textContent   = Math.round(annual / capacity).toLocaleString();
+    document.getElementById('stat-monthly').textContent = Math.round(annual / 12).toLocaleString();
+
+    /* Chart */
+    if (chartInst) chartInst.destroy();
+    const ctx = document.getElementById('chart').getContext('2d');
+    chartInst = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: MONTHS_SHORT,
+        datasets: [{
+          label: 'Monthly Output (kWh)',
+          data: kwh.map(v => +v.toFixed(1)),
+          backgroundColor: kwh.map(v => {
+            const r = v / maxKwh;
+            return `rgba(247,151,30,${(.35 + r * .65).toFixed(2)})`;
+          }),
+          borderColor: '#e08b10',
+          borderWidth: 1,
+          borderRadius: 6,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: 'kWh' }
+          }
+        }
+      }
+    });
+
+    /* Table */
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = kwh.map((v, i) => `
+      <tr>
+        <td><strong>${MONTHS[i]}</strong></td>
+        <td><strong>${Math.round(v).toLocaleString()}</strong></td>
+        <td>${(v / DAYS[i]).toFixed(1)}</td>
+        <td>${((v / annual) * 100).toFixed(1)}%</td>
+        <td class="bar-wrap">
+          <div class="mini-bar" style="width:${((v / maxKwh) * 100).toFixed(0)}%"></div>
+        </td>
+      </tr>
+    `).join('');
+
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  /* ── Helpers ── */
+  function showError(msg) {
+    document.getElementById('error-area').innerHTML =
+      `<div class="error-box">⚠️ ${msg}</div>`;
+  }
+  function clearError() {
+    document.getElementById('error-area').innerHTML = '';
+  }
+
+  /* Init */
+  updatePRBadge();
+</script>
+</body>
+</html>
