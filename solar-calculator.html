@@ -241,6 +241,20 @@
         <span class="hint">0.60–0.70 Poor · 0.70–0.80 Average · 0.80–0.85 Good · 0.85–0.95 Excellent</span>
       </div>
 
+      <!-- Degradation -->
+      <div class="form-group">
+        <label>Panel Degradation Rate (%/year)</label>
+        <input type="number" id="degradation" value="0.5" min="0.1" max="2.0" step="0.1" />
+        <span class="hint">Typical: 0.5%/yr (monocrystalline) · 0.7%/yr (polycrystalline)</span>
+      </div>
+
+      <!-- Years -->
+      <div class="form-group">
+        <label>Project Lifetime (years)</label>
+        <input type="number" id="years" value="25" min="1" max="40" step="1" />
+        <span class="hint">Standard warranty period is 25 years</span>
+      </div>
+
     </div><!-- /form-grid -->
 
     <input type="hidden" id="lat" />
@@ -254,7 +268,7 @@
     <div class="note">
       ℹ️ PVGIS automatically accounts for local irradiance and panel temperature using 10+ years of
       satellite data. Your PR covers remaining losses: inverter efficiency, wiring, shading, soiling,
-      and mismatch.
+      and mismatch. Degradation compounds annually from Year 1 output.
     </div>
   </div><!-- /card -->
 
@@ -284,7 +298,7 @@
     </div>
 
     <div class="card">
-      <div class="card-title">📅 Monthly Breakdown</div>
+      <div class="card-title">📅 Monthly Breakdown — Year 1</div>
       <table>
         <thead>
           <tr>
@@ -299,6 +313,41 @@
       </table>
     </div>
 
+    <!-- ── Degradation section ── -->
+    <div class="stats-grid" style="grid-template-columns: repeat(2,1fr);">
+      <div class="stat-card stat-green">
+        <div class="stat-value" id="stat-lifetime">—</div>
+        <div class="stat-label">Total Lifetime Output (kWh)</div>
+      </div>
+      <div class="stat-card" style="background:linear-gradient(135deg,#e96c6c,#f7a26e);">
+        <div class="stat-value" id="stat-finalyear">—</div>
+        <div class="stat-label" id="stat-finalyear-label">Final Year Output (kWh)</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📉 Annual Output Over Lifetime (with Degradation)</div>
+      <div class="chart-wrap">
+        <canvas id="chart-deg"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📋 Year-by-Year Breakdown</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Year</th>
+            <th>Annual Output (kWh)</th>
+            <th>vs Year 1</th>
+            <th>Cumulative Total (kWh)</th>
+            <th class="bar-wrap"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody-deg"></tbody>
+      </table>
+    </div>
+
   </div><!-- /results -->
 
 </div><!-- /container -->
@@ -310,6 +359,7 @@
   const DAYS        = [31,28,31,30,31,30,31,31,30,31,30,31];
 
   let chartInst = null;
+  let chartDeg  = null;
 
   /* ── PR badge ── */
   function updatePRBadge() {
@@ -357,18 +407,22 @@
   async function calculate() {
     clearError();
 
-    const lat      = document.getElementById('lat').value;
-    const lon      = document.getElementById('lon').value;
-    const capacity = parseFloat(document.getElementById('capacity').value);
-    const tilt     = parseFloat(document.getElementById('tilt').value);
-    const azimuth  = parseFloat(document.getElementById('azimuth').value);
-    const pr       = parseFloat(document.getElementById('pr').value);
+    const lat        = document.getElementById('lat').value;
+    const lon        = document.getElementById('lon').value;
+    const capacity   = parseFloat(document.getElementById('capacity').value);
+    const tilt       = parseFloat(document.getElementById('tilt').value);
+    const azimuth    = parseFloat(document.getElementById('azimuth').value);
+    const pr         = parseFloat(document.getElementById('pr').value);
+    const degradation = parseFloat(document.getElementById('degradation').value);
+    const years      = parseInt(document.getElementById('years').value);
 
-    if (!lat || !lon)                            { showError('Search for your location first.'); return; }
-    if (!capacity || capacity <= 0)              { showError('Enter a valid system capacity (kWp).'); return; }
-    if (isNaN(tilt)    || tilt < 0 || tilt > 90) { showError('Tilt must be between 0° and 90°.'); return; }
+    if (!lat || !lon)                             { showError('Search for your location first.'); return; }
+    if (!capacity || capacity <= 0)               { showError('Enter a valid system capacity (kWp).'); return; }
+    if (isNaN(tilt)    || tilt < 0 || tilt > 90)  { showError('Tilt must be between 0° and 90°.'); return; }
     if (isNaN(azimuth) || azimuth < 0 || azimuth > 360) { showError('Azimuth must be between 0° and 360°.'); return; }
-    if (isNaN(pr)      || pr < 0.5 || pr > 1)   { showError('Performance Ratio must be between 0.50 and 1.0.'); return; }
+    if (isNaN(pr)      || pr < 0.5 || pr > 1)    { showError('Performance Ratio must be between 0.50 and 1.0.'); return; }
+    if (isNaN(degradation) || degradation < 0.1 || degradation > 2.0) { showError('Degradation must be between 0.1% and 2.0% per year.'); return; }
+    if (isNaN(years) || years < 1 || years > 40)  { showError('Project lifetime must be between 1 and 40 years.'); return; }
 
     // PVGIS aspect: 0=South, -90=East, 90=West (opposite of compass azimuth convention)
     const aspect = azimuth - 180;
@@ -404,6 +458,7 @@
       const kwh    = kwhRaw.map(v => v * pr);
 
       renderResults(kwh, capacity);
+      renderDegradation(kwh, degradation, years);
 
     } catch (e) {
       showError(`PVGIS API error: ${e.message}`);
@@ -471,6 +526,109 @@
 
     document.getElementById('results').style.display = 'block';
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  /* ── Degradation over lifetime ── */
+  function renderDegradation(year1Kwh, degradationPct, years) {
+    const year1Annual = year1Kwh.reduce((a, b) => a + b, 0);
+    const rate        = degradationPct / 100;
+
+    // Build per-year annual output: Year Y = year1 × (1 - rate)^(Y-1)
+    const yearlyOutput = [];
+    let cumulative = 0;
+    for (let y = 1; y <= years; y++) {
+      const output = year1Annual * Math.pow(1 - rate, y - 1);
+      cumulative  += output;
+      yearlyOutput.push({ year: y, output, cumulative });
+    }
+
+    const finalOutput  = yearlyOutput[years - 1].output;
+    const totalLifetime = yearlyOutput[years - 1].cumulative;
+
+    document.getElementById('stat-lifetime').textContent =
+      Math.round(totalLifetime).toLocaleString();
+    document.getElementById('stat-finalyear').textContent =
+      Math.round(finalOutput).toLocaleString();
+    document.getElementById('stat-finalyear-label').textContent =
+      `Year ${years} Output (kWh)  [${((finalOutput / year1Annual) * 100).toFixed(1)}% of Year 1]`;
+
+    /* Line chart */
+    if (chartDeg) chartDeg.destroy();
+    const ctx = document.getElementById('chart-deg').getContext('2d');
+    chartDeg = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: yearlyOutput.map(d => `Yr ${d.year}`),
+        datasets: [
+          {
+            label: 'Annual Output (kWh)',
+            data: yearlyOutput.map(d => +d.output.toFixed(1)),
+            borderColor: '#f7971e',
+            backgroundColor: 'rgba(247,151,30,.12)',
+            borderWidth: 2,
+            pointRadius: years <= 25 ? 3 : 1,
+            fill: true,
+            tension: 0.3,
+            yAxisID: 'y',
+          },
+          {
+            label: 'Cumulative Output (kWh)',
+            data: yearlyOutput.map(d => +d.cumulative.toFixed(0)),
+            borderColor: '#667eea',
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointRadius: 0,
+            borderDash: [5, 4],
+            tension: 0.3,
+            yAxisID: 'y2',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.dataset.label}: ${Math.round(ctx.raw).toLocaleString()} kWh`
+            }
+          }
+        },
+        scales: {
+          y: {
+            type: 'linear',
+            position: 'left',
+            title: { display: true, text: 'Annual Output (kWh)' },
+            beginAtZero: false,
+          },
+          y2: {
+            type: 'linear',
+            position: 'right',
+            title: { display: true, text: 'Cumulative (kWh)' },
+            grid: { drawOnChartArea: false },
+          }
+        }
+      }
+    });
+
+    /* Year-by-year table */
+    const tbody = document.getElementById('tbody-deg');
+    tbody.innerHTML = yearlyOutput.map(({ year, output, cumulative }) => `
+      <tr>
+        <td><strong>Year ${year}</strong></td>
+        <td><strong>${Math.round(output).toLocaleString()}</strong></td>
+        <td style="color:${year === 1 ? '#2e7d32' : '#c62828'}">
+          ${year === 1 ? '—' : '-' + ((1 - output / year1Annual) * 100).toFixed(2) + '%'}
+        </td>
+        <td>${Math.round(cumulative).toLocaleString()}</td>
+        <td class="bar-wrap">
+          <div class="mini-bar" style="width:${((output / year1Annual) * 100).toFixed(1)}%;
+               background:linear-gradient(90deg,#667eea,#764ba2);"></div>
+        </td>
+      </tr>
+    `).join('');
   }
 
   /* ── Helpers ── */
