@@ -175,6 +175,22 @@
 
     .results-section { display: none; }
 
+    .row-past td   { color: #bbb; }
+    .row-current   { background: #fff8e1 !important; }
+    .row-current td { font-weight: 600; }
+    .badge-now {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 10px;
+      background: #f7971e;
+      color: #fff;
+      font-size: .68rem;
+      font-weight: 700;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .stat-sub { font-size: .72rem; opacity: .8; margin-top: 3px; }
+
     @media (max-width: 600px) {
       .form-grid  { grid-template-columns: 1fr; }
       .stats-grid { grid-template-columns: 1fr; }
@@ -255,6 +271,13 @@
         <span class="hint">Standard warranty period is 25 years</span>
       </div>
 
+      <!-- Age -->
+      <div class="form-group">
+        <label>Years in Service</label>
+        <input type="number" id="age" value="0" min="0" max="39" step="1" />
+        <span class="hint">How many years the system has already been operating (0 = brand new)</span>
+      </div>
+
     </div><!-- /form-grid -->
 
     <input type="hidden" id="lat" />
@@ -278,15 +301,16 @@
     <div class="stats-grid">
       <div class="stat-card stat-yellow">
         <div class="stat-value" id="stat-annual">—</div>
-        <div class="stat-label">Annual Output (kWh/yr)</div>
+        <div class="stat-label" id="stat-annual-label">Annual Output (kWh/yr)</div>
+        <div class="stat-sub" id="stat-annual-sub"></div>
       </div>
       <div class="stat-card stat-green">
         <div class="stat-value" id="stat-yield">—</div>
-        <div class="stat-label">Specific Yield (kWh/kWp)</div>
+        <div class="stat-label" id="stat-yield-label">Specific Yield (kWh/kWp)</div>
       </div>
       <div class="stat-card stat-purple">
         <div class="stat-value" id="stat-monthly">—</div>
-        <div class="stat-label">Avg Monthly (kWh)</div>
+        <div class="stat-label" id="stat-monthly-label">Avg Monthly (kWh)</div>
       </div>
     </div>
 
@@ -314,10 +338,14 @@
     </div>
 
     <!-- ── Degradation section ── -->
-    <div class="stats-grid" style="grid-template-columns: repeat(2,1fr);">
+    <div class="stats-grid">
       <div class="stat-card stat-green">
         <div class="stat-value" id="stat-lifetime">—</div>
-        <div class="stat-label">Total Lifetime Output (kWh)</div>
+        <div class="stat-label" id="stat-lifetime-label">Total Lifetime Output (kWh)</div>
+      </div>
+      <div class="stat-card stat-purple">
+        <div class="stat-value" id="stat-remaining">—</div>
+        <div class="stat-label" id="stat-remaining-label">Remaining Output (kWh)</div>
       </div>
       <div class="stat-card" style="background:linear-gradient(135deg,#e96c6c,#f7a26e);">
         <div class="stat-value" id="stat-finalyear">—</div>
@@ -434,6 +462,7 @@
     const pr         = parseFloat(document.getElementById('pr').value);
     const degradation = parseFloat(document.getElementById('degradation').value);
     const years      = parseInt(document.getElementById('years').value);
+    const age        = parseInt(document.getElementById('age').value);
 
     if (!lat || !lon)                             { showError('Search for your location first.'); return; }
     if (!capacity || capacity <= 0)               { showError('Enter a valid system capacity (kWp).'); return; }
@@ -442,6 +471,7 @@
     if (isNaN(pr)      || pr < 0.5 || pr > 1)    { showError('Performance Ratio must be between 0.50 and 1.0.'); return; }
     if (isNaN(degradation) || degradation < 0.1 || degradation > 2.0) { showError('Degradation must be between 0.1% and 2.0% per year.'); return; }
     if (isNaN(years) || years < 1 || years > 40)  { showError('Project lifetime must be between 1 and 40 years.'); return; }
+    if (isNaN(age)   || age < 0 || age >= years)  { showError(`Years in service must be between 0 and ${years - 1}.`); return; }
 
     // PVGIS aspect: 0=South, -90=East, 90=West (opposite of compass azimuth convention)
     const aspect = azimuth - 180;
@@ -470,8 +500,8 @@
       const kwhRaw = monthly.map(m => m['E_m']);
       const kwh    = kwhRaw.map(v => v * pr);
 
-      renderResults(kwh, capacity);
-      renderDegradation(kwh, degradation, years);
+      renderResults(kwh, capacity, age, degradation);
+      renderDegradation(kwh, degradation, years, age);
 
     } catch (e) {
       showError(`PVGIS API error: ${e.message}`);
@@ -482,14 +512,29 @@
   }
 
   /* ── Render ── */
-  function renderResults(kwh, capacity) {
-    const annual  = kwh.reduce((a, b) => a + b, 0);
-    const maxKwh  = Math.max(...kwh);
-    const totalStr = Math.round(annual).toLocaleString();
+  function renderResults(year1Kwh, capacity, age, degradationPct) {
+    const rate       = degradationPct / 100;
+    // Apply age degradation: current year = year 1 × (1 - rate)^age
+    const curKwh     = year1Kwh.map(v => v * Math.pow(1 - rate, age));
+    const curAnnual  = curKwh.reduce((a, b) => a + b, 0);
+    const year1Annual = year1Kwh.reduce((a, b) => a + b, 0);
+    const maxKwh     = Math.max(...curKwh);
+    const yearLabel  = age === 0 ? 'Year 1 (New)' : `Year ${age + 1} (Current)`;
 
-    document.getElementById('stat-annual').textContent  = totalStr;
-    document.getElementById('stat-yield').textContent   = Math.round(annual / capacity).toLocaleString();
-    document.getElementById('stat-monthly').textContent = Math.round(annual / 12).toLocaleString();
+    document.getElementById('stat-annual').textContent       = Math.round(curAnnual).toLocaleString();
+    document.getElementById('stat-annual-label').textContent = `Annual Output — ${yearLabel} (kWh)`;
+    document.getElementById('stat-annual-sub').textContent   =
+      age > 0 ? `Year 1 baseline: ${Math.round(year1Annual).toLocaleString()} kWh` : '';
+
+    document.getElementById('stat-yield').textContent       = Math.round(curAnnual / capacity).toLocaleString();
+    document.getElementById('stat-yield-label').textContent = `Specific Yield — ${yearLabel} (kWh/kWp)`;
+
+    document.getElementById('stat-monthly').textContent       = Math.round(curAnnual / 12).toLocaleString();
+    document.getElementById('stat-monthly-label').textContent = `Avg Monthly — ${yearLabel} (kWh)`;
+
+    /* Monthly chart title */
+    document.querySelector('#results .card-title').textContent =
+      `📊 Monthly Production — ${yearLabel}`;
 
     /* Chart */
     if (chartInst) chartInst.destroy();
@@ -499,9 +544,9 @@
       data: {
         labels: MONTHS_SHORT,
         datasets: [{
-          label: 'Monthly Output (kWh)',
-          data: kwh.map(v => +v.toFixed(1)),
-          backgroundColor: kwh.map(v => {
+          label: `Monthly Output ${yearLabel} (kWh)`,
+          data: curKwh.map(v => +v.toFixed(1)),
+          backgroundColor: curKwh.map(v => {
             const r = v / maxKwh;
             return `rgba(247,151,30,${(.35 + r * .65).toFixed(2)})`;
           }),
@@ -523,14 +568,18 @@
       }
     });
 
+    /* Monthly table title */
+    document.querySelectorAll('#results .card-title')[1].textContent =
+      `📅 Monthly Breakdown — ${yearLabel}`;
+
     /* Table */
     const tbody = document.getElementById('tbody');
-    tbody.innerHTML = kwh.map((v, i) => `
+    tbody.innerHTML = curKwh.map((v, i) => `
       <tr>
         <td><strong>${MONTHS[i]}</strong></td>
         <td><strong>${Math.round(v).toLocaleString()}</strong></td>
         <td>${(v / DAYS[i]).toFixed(1)}</td>
-        <td>${((v / annual) * 100).toFixed(1)}%</td>
+        <td>${((v / curAnnual) * 100).toFixed(1)}%</td>
         <td class="bar-wrap">
           <div class="mini-bar" style="width:${((v / maxKwh) * 100).toFixed(0)}%"></div>
         </td>
@@ -542,9 +591,10 @@
   }
 
   /* ── Degradation over lifetime ── */
-  function renderDegradation(year1Kwh, degradationPct, years) {
+  function renderDegradation(year1Kwh, degradationPct, years, age) {
     const year1Annual = year1Kwh.reduce((a, b) => a + b, 0);
     const rate        = degradationPct / 100;
+    const currentYear = age + 1; // 1-based year the system is currently in
 
     // Build per-year annual output: Year Y = year1 × (1 - rate)^(Y-1)
     const yearlyOutput = [];
@@ -555,39 +605,57 @@
       yearlyOutput.push({ year: y, output, cumulative });
     }
 
-    const finalOutput  = yearlyOutput[years - 1].output;
+    const finalOutput   = yearlyOutput[years - 1].output;
     const totalLifetime = yearlyOutput[years - 1].cumulative;
 
-    document.getElementById('stat-lifetime').textContent =
-      Math.round(totalLifetime).toLocaleString();
-    document.getElementById('stat-finalyear').textContent =
-      Math.round(finalOutput).toLocaleString();
-    document.getElementById('stat-finalyear-label').textContent =
-      `Year ${years} Output (kWh)  [${((finalOutput / year1Annual) * 100).toFixed(1)}% of Year 1]`;
+    // Remaining output = cumulative from current year to end
+    const pastCumulative  = age > 0 ? yearlyOutput[age - 1].cumulative : 0;
+    const remainingOutput = totalLifetime - pastCumulative;
 
-    /* Line chart */
+    /* Stat cards */
+    document.getElementById('stat-lifetime').textContent       = Math.round(totalLifetime).toLocaleString();
+    document.getElementById('stat-lifetime-label').textContent = `Total Lifetime Output (Years 1–${years})`;
+
+    document.getElementById('stat-remaining').textContent       = Math.round(remainingOutput).toLocaleString();
+    document.getElementById('stat-remaining-label').textContent =
+      age === 0
+        ? `Remaining Output (Years 1–${years})`
+        : `Remaining Output (Years ${currentYear}–${years})`;
+
+    document.getElementById('stat-finalyear').textContent       = Math.round(finalOutput).toLocaleString();
+    document.getElementById('stat-finalyear-label').textContent =
+      `Year ${years} Output (kWh) · ${((finalOutput / year1Annual) * 100).toFixed(1)}% of Year 1`;
+
+    /* Line chart — color segments: past=grey, current=orange, future=blue */
     if (chartDeg) chartDeg.destroy();
     const ctx = document.getElementById('chart-deg').getContext('2d');
     chartDeg = new Chart(ctx, {
-      type: 'line',
+      type: 'bar',
       data: {
         labels: yearlyOutput.map(d => `Yr ${d.year}`),
         datasets: [
           {
             label: 'Annual Output (kWh)',
             data: yearlyOutput.map(d => +d.output.toFixed(1)),
-            borderColor: '#f7971e',
-            backgroundColor: 'rgba(247,151,30,.12)',
-            borderWidth: 2,
-            pointRadius: years <= 25 ? 3 : 1,
-            fill: true,
-            tension: 0.3,
+            backgroundColor: yearlyOutput.map(d =>
+              d.year < currentYear  ? 'rgba(180,180,180,.6)'   :
+              d.year === currentYear ? 'rgba(247,151,30,.95)'  :
+                                       'rgba(102,126,234,.65)'
+            ),
+            borderColor: yearlyOutput.map(d =>
+              d.year < currentYear  ? '#aaa'    :
+              d.year === currentYear ? '#e08b10' :
+                                       '#5a6fd6'
+            ),
+            borderWidth: 1,
+            borderRadius: 4,
             yAxisID: 'y',
           },
           {
             label: 'Cumulative Output (kWh)',
             data: yearlyOutput.map(d => +d.cumulative.toFixed(0)),
-            borderColor: '#667eea',
+            type: 'line',
+            borderColor: '#56ab2f',
             backgroundColor: 'transparent',
             borderWidth: 2,
             pointRadius: 0,
@@ -605,43 +673,43 @@
           legend: { position: 'top' },
           tooltip: {
             callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${Math.round(ctx.raw).toLocaleString()} kWh`
+              title: items => {
+                const y = yearlyOutput[items[0].dataIndex].year;
+                const tag = y < currentYear ? ' (past)' : y === currentYear ? ' ← current' : ' (future)';
+                return `Year ${y}${tag}`;
+              },
+              label: c => ` ${c.dataset.label}: ${Math.round(c.raw).toLocaleString()} kWh`
             }
           }
         },
         scales: {
-          y: {
-            type: 'linear',
-            position: 'left',
-            title: { display: true, text: 'Annual Output (kWh)' },
-            beginAtZero: false,
-          },
-          y2: {
-            type: 'linear',
-            position: 'right',
-            title: { display: true, text: 'Cumulative (kWh)' },
-            grid: { drawOnChartArea: false },
-          }
+          y:  { type: 'linear', position: 'left',  title: { display: true, text: 'Annual Output (kWh)' }, beginAtZero: false },
+          y2: { type: 'linear', position: 'right', title: { display: true, text: 'Cumulative (kWh)' }, grid: { drawOnChartArea: false } }
         }
       }
     });
 
     /* Year-by-year table */
     const tbody = document.getElementById('tbody-deg');
-    tbody.innerHTML = yearlyOutput.map(({ year, output, cumulative }) => `
-      <tr>
-        <td><strong>Year ${year}</strong></td>
-        <td><strong>${Math.round(output).toLocaleString()}</strong></td>
-        <td style="color:${year === 1 ? '#2e7d32' : '#c62828'}">
-          ${year === 1 ? '—' : '-' + ((1 - output / year1Annual) * 100).toFixed(2) + '%'}
-        </td>
-        <td>${Math.round(cumulative).toLocaleString()}</td>
-        <td class="bar-wrap">
-          <div class="mini-bar" style="width:${((output / year1Annual) * 100).toFixed(1)}%;
-               background:linear-gradient(90deg,#667eea,#764ba2);"></div>
-        </td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = yearlyOutput.map(({ year, output, cumulative }) => {
+      const isPast    = year < currentYear;
+      const isCurrent = year === currentYear;
+      const rowClass  = isPast ? 'row-past' : isCurrent ? 'row-current' : '';
+      const badge     = isCurrent ? '<span class="badge-now">NOW</span>' : '';
+      const vsYear1   = year === 1 ? '—' : `-${((1 - output / year1Annual) * 100).toFixed(2)}%`;
+      const vsColor   = year === 1 ? '#2e7d32' : isPast ? '#bbb' : '#c62828';
+      return `
+        <tr class="${rowClass}">
+          <td><strong>Year ${year}</strong>${badge}</td>
+          <td><strong>${Math.round(output).toLocaleString()}</strong></td>
+          <td style="color:${vsColor}">${vsYear1}</td>
+          <td>${Math.round(cumulative).toLocaleString()}</td>
+          <td class="bar-wrap">
+            <div class="mini-bar" style="width:${((output / year1Annual) * 100).toFixed(1)}%;
+                 background:${isCurrent ? 'linear-gradient(90deg,#f7971e,#ffd200)' : isPast ? '#ccc' : 'linear-gradient(90deg,#667eea,#764ba2)'};"></div>
+          </td>
+        </tr>`;
+    }).join('');
   }
 
   /* ── Helpers ── */
