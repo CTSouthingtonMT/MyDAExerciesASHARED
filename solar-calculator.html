@@ -202,7 +202,7 @@
 
 <div class="header">
   <h1>☀️ Solar PV Output Calculator</h1>
-  <p>Estimate monthly &amp; annual solar energy generation · Powered by PVGIS satellite data</p>
+  <p>Estimate monthly &amp; annual solar energy generation · Powered by NASA POWER satellite data</p>
 </div>
 
 <div class="container">
@@ -289,9 +289,9 @@
     <div id="error-area"></div>
 
     <div class="note">
-      ℹ️ PVGIS automatically accounts for local irradiance and panel temperature using 10+ years of
-      satellite data. Your PR covers remaining losses: inverter efficiency, wiring, shading, soiling,
-      and mismatch. Degradation compounds annually from Year 1 output.
+      ℹ️ Irradiance data from NASA POWER (2014–2023 average). Tilt/azimuth correction applied using
+      the Liu-Jordan isotropic sky model. Your PR covers system losses: inverter efficiency, wiring,
+      shading, soiling, and mismatch. Degradation compounds annually from Year 1 output.
     </div>
   </div><!-- /card -->
 
@@ -389,24 +389,46 @@
   let chartInst = null;
   let chartDeg  = null;
 
-  /* ── Fetch with automatic CORS-proxy fallback ── */
-  async function fetchJSON(url, options) {
-    // 1. Try direct request (works when served over http/https)
-    try {
-      const r = await fetch(url, options);
-      if (r.ok) return r.json();
-      const msg = await r.text().catch(() => `HTTP ${r.status}`);
-      throw new Error(msg || `HTTP ${r.status}`);
-    } catch (e) {
-      // Only retry network/CORS errors, not server errors (4xx/5xx already thrown above)
-      if (!(e instanceof TypeError)) throw e;
-    }
+  /* ── Solar physics: Liu-Jordan isotropic tilt correction ── */
+  // Monthly mean solar declination (degrees), indices 0=Jan … 11=Dec
+  const DECLINATION = [-20.9,-13.0,-2.4,9.4,18.8,23.1,21.2,13.5,2.2,-9.6,-18.9,-23.0];
 
-    // 2. Retry via CORS proxy (handles file:// and blocked origins)
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const r2 = await fetch(proxied, options);
-    if (r2.ok) return r2.json();
-    throw new Error(`HTTP ${r2.status} (via proxy)`);
+  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+  // Monthly average beam-radiation ratio R_b for an equator-facing tilted surface
+  function calcRb(latDeg, tiltDeg, mi) {
+    const L  = latDeg  * Math.PI / 180;
+    const B  = tiltDeg * Math.PI / 180;
+    const d  = DECLINATION[mi] * Math.PI / 180;
+    const sign = latDeg >= 0 ? 1 : -1;     // tilt toward equator
+
+    const wsH  = Math.acos(clamp(-Math.tan(L) * Math.tan(d), -1, 1));
+    const effL = L - sign * B;
+    const wsT  = Math.acos(clamp(-Math.tan(effL) * Math.tan(d), -1, 1));
+    const ws   = Math.min(wsH, wsT);
+
+    const num = Math.cos(effL)*Math.cos(d)*Math.sin(ws) + ws*Math.sin(effL)*Math.sin(d);
+    const den = Math.cos(L)   *Math.cos(d)*Math.sin(wsH)+ wsH*Math.sin(L)   *Math.sin(d);
+    return den > 0.001 ? Math.max(0, num / den) : 1;
+  }
+
+  // Plane-of-array irradiance (kWh/m²/day) using isotropic sky model
+  function calcPOA(ghiDay, diffDay, latDeg, tiltDeg, azimuthDeg, mi) {
+    const B       = tiltDeg * Math.PI / 180;
+    const beam    = Math.max(0, ghiDay - diffDay);
+    const optAz   = latDeg >= 0 ? 180 : 0;           // equator-facing azimuth
+    const azFactor = Math.max(0, Math.cos((azimuthDeg - optAz) * Math.PI / 180));
+    const Rb      = calcRb(latDeg, tiltDeg, mi) * azFactor;
+    return beam * Rb
+         + diffDay * (1 + Math.cos(B)) / 2
+         + ghiDay  * 0.20 * (1 - Math.cos(B)) / 2;
+  }
+
+  /* ── Fetch helper ── */
+  async function fetchJSON(url, options) {
+    const r = await fetch(url, options);
+    if (r.ok) return r.json();
+    throw new Error(`HTTP ${r.status}`);
   }
 
   /* ── PR badge ── */
@@ -473,38 +495,47 @@
     if (isNaN(years) || years < 1 || years > 40)  { showError('Project lifetime must be between 1 and 40 years.'); return; }
     if (isNaN(age)   || age < 0 || age >= years)  { showError(`Years in service must be between 0 and ${years - 1}.`); return; }
 
-    // PVGIS aspect: 0=South, -90=East, 90=West (opposite of compass azimuth convention)
-    const aspect = azimuth - 180;
-
     const btn = document.getElementById('btn-calc');
     btn.textContent = 'Fetching data…';
     btn.disabled = true;
 
     try {
-      const pvgisUrl = `https://re.jrc.ec.europa.eu/api/v5_2/PVcalc`
-        + `?lat=${lat}&lon=${lon}`
-        + `&peakpower=${capacity}`
-        + `&loss=0`
-        + `&angle=${tilt}`
-        + `&aspect=${aspect}`
-        + `&outputformat=json`
-        + `&mountingplace=free`
-        + `&pvtechchoice=crystSi`;
+      // NASA POWER: monthly GHI + diffuse, 10-year average (2014-2023)
+      const nasaUrl = `https://power.larc.nasa.gov/api/temporal/monthly/point`
+        + `?parameters=ALLSKY_SFC_SW_DWN,ALLSKY_SFC_SW_DIFF`
+        + `&community=RE`
+        + `&longitude=${lon}&latitude=${lat}`
+        + `&format=JSON&start=2014&end=2023`;
 
-      // loss=0 so PVGIS returns temperature-corrected output with no additional losses.
-      // We apply PR ourselves for full transparency.
-      const json    = await fetchJSON(pvgisUrl);
-      const monthly = json.outputs.monthly.fixed;
+      const json = await fetchJSON(nasaUrl);
+      const ghiRaw  = json.properties.parameter.ALLSKY_SFC_SW_DWN;
+      const diffRaw = json.properties.parameter.ALLSKY_SFC_SW_DIFF;
 
-      // Apply PR multiplier to PVGIS temperature-corrected monthly output
-      const kwhRaw = monthly.map(m => m['E_m']);
-      const kwh    = kwhRaw.map(v => v * pr);
+      // Average monthly values across all available years; skip "13" (annual key)
+      const yrs = Object.keys(ghiRaw);
+      const monthlyGHI  = Array.from({length: 12}, (_, i) => {
+        const k = String(i + 1).padStart(2, '0');
+        const vals = yrs.map(y => ghiRaw[y][k]).filter(v => v > 0);
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+      });
+      const monthlyDiff = Array.from({length: 12}, (_, i) => {
+        const k = String(i + 1).padStart(2, '0');
+        const vals = yrs.map(y => diffRaw[y][k]).filter(v => v > 0);
+        return vals.reduce((a, b) => a + b, 0) / vals.length;
+      });
+
+      // POA irradiance → monthly energy: E = POA (kWh/m²/day) × days × kWp × PR
+      const latNum = parseFloat(lat);
+      const kwh = monthlyGHI.map((ghi, i) => {
+        const poa = calcPOA(ghi, monthlyDiff[i], latNum, tilt, azimuth, i);
+        return poa * DAYS[i] * capacity * pr;
+      });
 
       renderResults(kwh, capacity, age, degradation);
       renderDegradation(kwh, degradation, years, age);
 
     } catch (e) {
-      showError(`PVGIS API error: ${e.message}`);
+      showError(`Data error: ${e.message}`);
     } finally {
       btn.textContent = 'Calculate Solar Output';
       btn.disabled = false;
