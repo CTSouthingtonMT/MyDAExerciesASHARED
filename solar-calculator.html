@@ -511,18 +511,22 @@
       const ghiRaw  = json.properties.parameter.ALLSKY_SFC_SW_DWN;
       const diffRaw = json.properties.parameter.ALLSKY_SFC_SW_DIFF;
 
-      // Average monthly values across all available years; skip "13" (annual key)
-      const yrs = Object.keys(ghiRaw);
-      const monthlyGHI  = Array.from({length: 12}, (_, i) => {
-        const k = String(i + 1).padStart(2, '0');
-        const vals = yrs.map(y => ghiRaw[y][k]).filter(v => v > 0);
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      });
-      const monthlyDiff = Array.from({length: 12}, (_, i) => {
-        const k = String(i + 1).padStart(2, '0');
-        const vals = yrs.map(y => diffRaw[y][k]).filter(v => v > 0);
-        return vals.reduce((a, b) => a + b, 0) / vals.length;
-      });
+      // NASA POWER returns flat "YYYYMM" keys e.g. "201401" = Jan 2014.
+      // Average each calendar month across all years; skip -999 fill values.
+      function avgMonth(param) {
+        return Array.from({length: 12}, (_, i) => {
+          const mm   = String(i + 1).padStart(2, '0');
+          const vals = Object.entries(param)
+            .filter(([k, v]) => k.length === 6 && k.slice(4) === mm && v > 0)
+            .map(([, v]) => v);
+          return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+        });
+      }
+      const monthlyGHI  = avgMonth(ghiRaw);
+      const monthlyDiff = avgMonth(diffRaw);
+
+      if (monthlyGHI.every(v => v === 0))
+        throw new Error('No irradiance data returned for this location.');
 
       // POA irradiance → monthly energy: E = POA (kWh/m²/day) × days × kWp × PR
       const latNum = parseFloat(lat);
