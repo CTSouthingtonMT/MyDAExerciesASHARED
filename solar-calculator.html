@@ -361,6 +361,26 @@
   let chartInst = null;
   let chartDeg  = null;
 
+  /* ── Fetch with automatic CORS-proxy fallback ── */
+  async function fetchJSON(url, options) {
+    // 1. Try direct request (works when served over http/https)
+    try {
+      const r = await fetch(url, options);
+      if (r.ok) return r.json();
+      const msg = await r.text().catch(() => `HTTP ${r.status}`);
+      throw new Error(msg || `HTTP ${r.status}`);
+    } catch (e) {
+      // Only retry network/CORS errors, not server errors (4xx/5xx already thrown above)
+      if (!(e instanceof TypeError)) throw e;
+    }
+
+    // 2. Retry via CORS proxy (handles file:// and blocked origins)
+    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const r2 = await fetch(proxied, options);
+    if (r2.ok) return r2.json();
+    throw new Error(`HTTP ${r2.status} (via proxy)`);
+  }
+
   /* ── PR badge ── */
   function updatePRBadge() {
     const pr    = parseFloat(document.getElementById('pr').value);
@@ -383,8 +403,7 @@
 
     try {
       const url  = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
-      const resp = await fetch(url, { headers: { 'Accept-Language': 'en' } });
-      const data = await resp.json();
+      const data = await fetchJSON(url, { headers: { 'Accept-Language': 'en' } });
 
       if (!data.length) { showError('Location not found. Try a more specific address.'); return; }
 
@@ -432,9 +451,7 @@
     btn.disabled = true;
 
     try {
-      // loss=0 so PVGIS returns temperature-corrected output with no additional losses.
-      // We apply PR ourselves for full transparency.
-      const api = `https://re.jrc.ec.europa.eu/api/v5_2/PVcalc`
+      const pvgisUrl = `https://re.jrc.ec.europa.eu/api/v5_2/PVcalc`
         + `?lat=${lat}&lon=${lon}`
         + `&peakpower=${capacity}`
         + `&loss=0`
@@ -444,13 +461,9 @@
         + `&mountingplace=free`
         + `&pvtechchoice=crystSi`;
 
-      const resp = await fetch(api);
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `HTTP ${resp.status}`);
-      }
-
-      const json    = await resp.json();
+      // loss=0 so PVGIS returns temperature-corrected output with no additional losses.
+      // We apply PR ourselves for full transparency.
+      const json    = await fetchJSON(pvgisUrl);
       const monthly = json.outputs.monthly.fixed;
 
       // Apply PR multiplier to PVGIS temperature-corrected monthly output
