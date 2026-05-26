@@ -500,40 +500,52 @@
     btn.disabled = true;
 
     try {
-      // NASA POWER: monthly GHI + diffuse, 10-year average (2014-2023)
+      // NASA POWER: fetch only GHI — one parameter, always available for RE community
       const nasaUrl = `https://power.larc.nasa.gov/api/temporal/monthly/point`
-        + `?parameters=ALLSKY_SFC_SW_DWN,ALLSKY_SFC_SW_DIFF`
+        + `?parameters=ALLSKY_SFC_SW_DWN`
         + `&community=RE`
         + `&longitude=${lon}&latitude=${lat}`
         + `&format=JSON&start=2014&end=2023`;
 
       const json = await fetchJSON(nasaUrl);
-      const ghiRaw  = json.properties.parameter.ALLSKY_SFC_SW_DWN;
-      const diffRaw = json.properties.parameter.ALLSKY_SFC_SW_DIFF;
 
-      // NASA POWER returns flat "YYYYMM" keys e.g. "201401" = Jan 2014.
-      // Average each calendar month across all years; skip -999 fill values.
+      // Log to browser console so format is visible for debugging
+      const ghiRaw = json.properties.parameter.ALLSKY_SFC_SW_DWN;
+      const sampleKeys = Object.keys(ghiRaw).slice(0, 6);
+      console.log('NASA POWER GHI keys (sample):', sampleKeys);
+      console.log('NASA POWER GHI values (sample):', sampleKeys.map(k => `${k}=${ghiRaw[k]}`));
+
+      // Match last-2-chars of key to month number ("01"–"12").
+      // Works for "YYYYMM" (e.g. "201401") and "YYYY-MM" (e.g. "2014-01").
+      // Skips NASA fill value −999 and non-numeric entries.
       function avgMonth(param) {
+        const entries = Object.entries(param);
         return Array.from({length: 12}, (_, i) => {
           const mm   = String(i + 1).padStart(2, '0');
-          const vals = Object.entries(param)
-            .filter(([k, v]) => k.length === 6 && k.slice(4) === mm && v > 0)
+          const vals = entries
+            .filter(([k, v]) => k.slice(-2) === mm && typeof v === 'number' && v > 0)
             .map(([, v]) => v);
           return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
         });
       }
+
       const monthlyGHI  = avgMonth(ghiRaw);
-      const monthlyDiff = avgMonth(diffRaw);
+      // Use fixed 30 % diffuse fraction — avoids depending on a second parameter
+      const monthlyDiff = monthlyGHI.map(v => v * 0.30);
+
+      console.log('Monthly GHI (avg kWh/m²/day):', monthlyGHI.map(v => v.toFixed(2)));
 
       if (monthlyGHI.every(v => v === 0))
-        throw new Error('No irradiance data returned for this location.');
+        throw new Error('Irradiance data came back as all zeros — check your internet connection or try a different location.');
 
-      // POA irradiance → monthly energy: E = POA (kWh/m²/day) × days × kWp × PR
       const latNum = parseFloat(lat);
       const kwh = monthlyGHI.map((ghi, i) => {
         const poa = calcPOA(ghi, monthlyDiff[i], latNum, tilt, azimuth, i);
         return poa * DAYS[i] * capacity * pr;
       });
+
+      if (kwh.some(v => isNaN(v) || !isFinite(v)))
+        throw new Error('Calculation produced invalid values — please check tilt, azimuth and PR inputs.');
 
       renderResults(kwh, capacity, age, degradation);
       renderDegradation(kwh, degradation, years, age);
